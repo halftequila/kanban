@@ -62,16 +62,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $title       = trim($_POST['title'] ?? '');
                 $description = trim($_POST['description'] ?? '');
                 $typeId      = isset($_POST['type_id']) && $_POST['type_id'] !== '' ? (int)$_POST['type_id'] : null;
-                $checklist   = parseChecklistPayload($_POST['checklist'] ?? null);
 
                 if (!$columnId || $title === '') {
                     throw new RuntimeException('缺少欄位或標題');
                 }
 
-                $cardId = Kanban_Widget_Card::create($columnId, $title, $description, $typeId);
-                if (!empty($checklist)) {
-                    Kanban_Widget_Card::replaceChecklist($cardId, $checklist);
-                }
+                Kanban_Widget_Card::create($columnId, $title, $description, $typeId);
                 echo json_encode(['ok' => true]);
                 break;
 
@@ -132,7 +128,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'title'       => $card['title'],
                         'description' => $card['description'] ?? '',
                         'type_id'     => $card['type_id'] ?? null,
-                        'checklist'   => Kanban_Widget_Card::fetchChecklist($cardId),
                     ],
                 ]);
                 break;
@@ -143,13 +138,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $title       = trim($_POST['title'] ?? '');
                 $description = trim($_POST['description'] ?? '');
                 $typeId      = isset($_POST['type_id']) && $_POST['type_id'] !== '' ? (int)$_POST['type_id'] : null;
-                $checklist   = parseChecklistPayload($_POST['checklist'] ?? null);
 
                 if (!$cardId || $title === '') {
                     throw new RuntimeException('缺少 card_id 或標題');
                 }
 
-                Kanban_Widget_Card::updateCard($cardId, $title, $description, $typeId, $columnId, $checklist);
+                Kanban_Widget_Card::updateCard($cardId, $title, $description, $typeId, $columnId);
                 echo json_encode(['ok' => true]);
                 break;
                 
