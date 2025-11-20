@@ -7,6 +7,48 @@ define('__KANBAN_ROOT__', __DIR__);
 require_once __KANBAN_ROOT__ . '/config.inc.php';
 require_once __KANBAN_ROOT__ . '/var/Bootstrap.php';
 
+function ensureTodoTemplateTable(): void
+{
+    $db = Kanban_Db::getInstance();
+    $db->exec(
+        'CREATE TABLE IF NOT EXISTS todo_templates (
+            id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            board_id INT NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            items LONGTEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_board (board_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
+}
+
+function parseChecklistPayload($raw): array
+{
+    if ($raw === null) {
+        return [];
+    }
+
+    $decoded = json_decode((string)$raw, true);
+    if (!is_array($decoded)) {
+        return [];
+    }
+
+    $items = [];
+    foreach ($decoded as $item) {
+        $title = isset($item['title']) ? trim((string)$item['title']) : '';
+        if ($title === '') {
+            continue;
+        }
+        $items[] = [
+            'id'    => isset($item['id']) ? (int)$item['id'] : null,
+            'title' => $title,
+            'done'  => !empty($item['done']),
+        ];
+    }
+
+    return $items;
+}
+
 // 處理 AJAX / POST 動作
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -19,12 +61,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $columnId    = (int)($_POST['column_id'] ?? 0);
                 $title       = trim($_POST['title'] ?? '');
                 $description = trim($_POST['description'] ?? '');
+                $typeId      = isset($_POST['type_id']) && $_POST['type_id'] !== '' ? (int)$_POST['type_id'] : null;
+                $checklist   = parseChecklistPayload($_POST['checklist'] ?? null);
 
                 if (!$columnId || $title === '') {
                     throw new RuntimeException('缺少欄位或標題');
                 }
 
-                Kanban_Widget_Card::create($columnId, $title, $description);
+                $cardId = Kanban_Widget_Card::create($columnId, $title, $description, $typeId);
+                if (!empty($checklist)) {
+                    Kanban_Widget_Card::replaceChecklist($cardId, $checklist);
+                }
                 echo json_encode(['ok' => true]);
                 break;
 
@@ -84,20 +131,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'column_id'   => (int)$card['column_id'],
                         'title'       => $card['title'],
                         'description' => $card['description'] ?? '',
+                        'type_id'     => $card['type_id'] ?? null,
+                        'checklist'   => Kanban_Widget_Card::fetchChecklist($cardId),
                     ],
                 ]);
                 break;
 
             case 'update_card':
                 $cardId      = (int)($_POST['card_id'] ?? 0);
+                $columnId    = isset($_POST['column_id']) ? (int)$_POST['column_id'] : null;
                 $title       = trim($_POST['title'] ?? '');
                 $description = trim($_POST['description'] ?? '');
+                $typeId      = isset($_POST['type_id']) && $_POST['type_id'] !== '' ? (int)$_POST['type_id'] : null;
+                $checklist   = parseChecklistPayload($_POST['checklist'] ?? null);
 
                 if (!$cardId || $title === '') {
                     throw new RuntimeException('缺少 card_id 或標題');
                 }
 
-                Kanban_Widget_Card::updateCard($cardId, $title, $description);
+                Kanban_Widget_Card::updateCard($cardId, $title, $description, $typeId, $columnId, $checklist);
                 echo json_encode(['ok' => true]);
                 break;
                 
@@ -106,6 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$boardId) throw new RuntimeException('缺少 board_id');
 
                 $db  = Kanban_Db::getInstance();
+                ensureTodoTemplateTable();
 
                 // 看板名稱
                 $stmt = $db->prepare('SELECT id, name FROM boards WHERE id = :id');
@@ -180,6 +233,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (!$boardId || $name === '') throw new RuntimeException('缺少資料');
 
+                ensureTodoTemplateTable();
                 // 前端會傳「一行一個 item」的字串，後端轉成 JSON array
                 $lines = array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', $items)));
                 $itemsJson = json_encode(array_values($lines), JSON_UNESCAPED_UNICODE);
@@ -200,6 +254,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $id = (int)($_POST['id'] ?? 0);
                 if (!$id) throw new RuntimeException('缺少 id');
 
+                ensureTodoTemplateTable();
                 $db = Kanban_Db::getInstance();
                 $stmt = $db->prepare('DELETE FROM todo_templates WHERE id = :id');
                 $stmt->execute(['id' => $id]);
@@ -207,15 +262,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 'apply_todo_template':
-                // 在卡片 description 裡，把模板轉成 Markdown checklist 附加上去
                 $cardId     = (int)($_POST['card_id'] ?? 0);
                 $templateId = (int)($_POST['template_id'] ?? 0);
                 if (!$cardId || !$templateId) throw new RuntimeException('缺少資料');
 
                 $db = Kanban_Db::getInstance();
-
-                // 撈卡片
-                $card = Kanban_Widget_Card::fetchOne($cardId);
+                ensureTodoTemplateTable();
 
                 // 撈模板
                 $stmt = $db->prepare('SELECT items FROM todo_templates WHERE id = :id');
@@ -224,16 +276,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$row) throw new RuntimeException('Template not found');
 
                 $items = json_decode($row['items'], true) ?: [];
-                if ($items) {
-                    $md = "\n\n";
-                    foreach ($items as $item) {
-                        $md .= '- [ ] ' . $item . "\n";
-                    }
-                    $newDesc = rtrim($card['description']) . $md;
-                    Kanban_Widget_Card::updateCard($cardId, $card['title'], $newDesc, $card['type_id'] ?? null);
-                }
+                $checklist = Kanban_Widget_Card::appendChecklistItems($cardId, $items);
 
-                echo json_encode(['ok' => true]);
+                echo json_encode(['ok' => true, 'checklist' => $checklist]);
                 break;
 
             default:
