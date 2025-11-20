@@ -1015,12 +1015,12 @@
         if (!title) return;
 
         const fd = new FormData();
+        fd.append('column_id', columnId);
         if (cardId) {
             fd.append('action', 'update_card');
             fd.append('card_id', cardId);
         } else {
             fd.append('action', 'add_card');
-            fd.append('column_id', columnId);
         }
         fd.append('title', title);
         fd.append('description', desc);
