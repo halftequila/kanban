@@ -52,6 +52,8 @@ class Kanban_Widget_Card extends Kanban_Widget_Base
             'pos' => $maxPos + 1,
             'type_id' => $typeId,
         ]);
+
+        return (int)$db->lastInsertId();
     }
 
     public static function reorderColumn(int $columnId, array $cardIds): void

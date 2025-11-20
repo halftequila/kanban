@@ -224,6 +224,11 @@
             justify-content: space-between;
             margin-bottom: 8px;
         }
+        .modal-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
         .modal-title {
             font-size: 15px;
             font-weight: 600;
@@ -238,6 +243,31 @@
             background: #e5f0ff;
             color: var(--accent);
         }
+        .template-menu { position: relative; }
+        .template-trigger {
+            border: 1px solid var(--border-subtle);
+            background: #fff;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            padding: 4px 8px;
+            border-radius: 8px;
+        }
+        .template-trigger:hover { background: rgba(0,0,0,.04); }
+        .template-dropdown {
+            position: absolute;
+            right: 0;
+            top: calc(100% + 6px);
+            background: #fff;
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
+            padding: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,.12);
+            min-width: 200px;
+            display: none;
+            z-index: 30;
+        }
+        .template-dropdown.show { display: block; }
         .modal-close {
             border: none;
             background: transparent;
@@ -287,6 +317,27 @@
             justify-content: flex-end;
             gap: 6px;
         }
+        .checklist-box {
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 8px;
+            background: #fff;
+        }
+        .checklist-empty {
+            color: var(--text-sub);
+            font-size: 12px;
+        }
+        .checklist-items { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+        .checklist-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        .checklist-row input[type="checkbox"] { width: 14px; height: 14px; }
+        .checklist-text { flex: 1; }
         .btn {
             font-size: 13px;
             padding: 6px 12px;
@@ -369,7 +420,18 @@
                 <span id="modal-title-text">卡片</span>
                 <span class="modal-pill" id="modal-column-name"></span>
             </div>
-            <button class="modal-close" type="button" id="modal-close-btn">×</button>
+            <div class="modal-actions">
+                <div class="template-menu">
+                    <button class="template-trigger" type="button" id="template-trigger" title="套用 To-do 模板">＋</button>
+                    <div class="template-dropdown" id="template-dropdown">
+                        <div class="field-label" style="margin-bottom:6px;">To-do 模板</div>
+                        <select class="field-select" id="template-select">
+                            <option value="">選擇模板…</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="modal-close" type="button" id="modal-close-btn">×</button>
+            </div>
         </div>
         <form id="card-form">
             <div class="modal-body">
@@ -393,21 +455,6 @@
                 </div>
 
                 <div>
-                    <div class="field-label">To-do 模板</div>
-                    <div style="display:flex; gap:6px; align-items:center;">
-                        <select class="field-select" id="template-select">
-                            <option value="">選擇模板…</option>
-                        </select>
-                        <button type="button"
-                                class="btn btn-secondary"
-                                id="template-apply-btn"
-                                style="white-space:nowrap;">
-                            套用
-                        </button>
-                    </div>
-                </div>
-
-                <div>
                     <div class="field-label">標題</div>
                     <input class="field-input" type="text" name="title" id="title-input" required>
                 </div>
@@ -416,7 +463,15 @@
                     <textarea class="field-textarea"
                               name="description"
                               id="desc-input"
-                              placeholder="在這裡輸入卡片的內容…（套用 To-do 模板時會自動插入勾選清單）"></textarea>
+                              placeholder="在這裡輸入卡片的內容…"></textarea>
+                </div>
+
+                <div>
+                    <div class="field-label">Checklists</div>
+                    <div class="checklist-box" id="checklist-box">
+                        <div class="checklist-empty" id="checklist-empty">尚未加入任何項目</div>
+                        <div class="checklist-items" id="checklist-items"></div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -491,9 +546,13 @@
     const columnSelect      = document.getElementById('column-select');
     const typeSelect        = document.getElementById('type-select');
     const templateSelect    = document.getElementById('template-select');
-    const templateApplyBtn  = document.getElementById('template-apply-btn');
+    const templateTrigger   = document.getElementById('template-trigger');
+    const templateDropdown  = document.getElementById('template-dropdown');
     const titleInput        = document.getElementById('title-input');
     const descInput         = document.getElementById('desc-input');
+    const checklistBox      = document.getElementById('checklist-box');
+    const checklistEmpty    = document.getElementById('checklist-empty');
+    const checklistItemsEl  = document.getElementById('checklist-items');
 
     // Settings modal elements
     const settingsBackdrop  = document.getElementById('settings-modal-backdrop');
@@ -511,6 +570,7 @@
     const tplSaveBtn        = document.getElementById('tpl-save-btn');
 
     let isDragging = false;
+    let checklistState = [];
 
     const currentSettings = {
         board: null,
@@ -533,10 +593,47 @@
         columnNameMap[id] = name;
     });
 
+    function setChecklistState(items) {
+        checklistState = (items || []).map(item => ({
+            id: item.id ?? null,
+            title: item.title || '',
+            done: !!item.done,
+        })).filter(i => i.title.trim() !== '');
+        renderChecklist();
+    }
+
+    function renderChecklist() {
+        if (!checklistItemsEl || !checklistBox || !checklistEmpty) return;
+        checklistItemsEl.innerHTML = '';
+        const hasItems = checklistState.length > 0;
+        checklistEmpty.style.display = hasItems ? 'none' : 'block';
+        checklistItemsEl.style.display = hasItems ? 'flex' : 'none';
+
+        checklistState.forEach((item, idx) => {
+            const row = document.createElement('label');
+            row.className = 'checklist-row';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = !!item.done;
+            cb.addEventListener('change', () => {
+                checklistState[idx].done = cb.checked;
+            });
+
+            const text = document.createElement('div');
+            text.className = 'checklist-text';
+            text.textContent = item.title;
+
+            row.appendChild(cb);
+            row.appendChild(text);
+            checklistItemsEl.appendChild(row);
+        });
+    }
+
     /* --------- Card Modal ---------- */
 
     function openCardModal(mode, opts) {
-        const {columnId, columnName, cardId, title, description, typeId} = opts;
+        const {columnId, columnName, cardId, title, description, typeId, checklist} = opts;
         cardIdInput.value = cardId || '';
         columnSelect.value = columnId || (columnSelect.options[0] && columnSelect.options[0].value) || '';
         modalColumnName.textContent = columnName || '';
@@ -545,6 +642,7 @@
         if (typeSelect) {
             typeSelect.value = typeId ? String(typeId) : '';
         }
+        setChecklistState(checklist || []);
         modalTitleText.textContent = mode === 'edit' ? '編輯卡片' : '新增卡片';
         cardModalBackdrop.classList.add('show');
         setTimeout(() => titleInput.focus(), 10);
@@ -552,6 +650,7 @@
 
     function closeCardModal() {
         cardModalBackdrop.classList.remove('show');
+        if (templateDropdown) templateDropdown.classList.remove('show');
     }
 
     cardModalBackdrop.addEventListener('click', (e) => {
@@ -976,7 +1075,8 @@
                             columnName: columnNameMap[c.column_id] || columnName,
                             title: c.title,
                             description: c.description || '',
-                            typeId: c.type_id || ''
+                            typeId: c.type_id || '',
+                            checklist: c.checklist || []
                         });
                     });
                 })
@@ -998,7 +1098,8 @@
                 columnName: colName,
                 title: '',
                 description: '',
-                typeId: ''
+                typeId: '',
+                checklist: []
             });
         });
     });
@@ -1012,6 +1113,11 @@
         const typeId   = typeSelect.value || '';
         const title    = titleInput.value.trim();
         const desc     = descInput.value.trim();
+        const checklistPayload = JSON.stringify(checklistState.map(item => ({
+            id: item.id ?? null,
+            title: item.title,
+            done: !!item.done,
+        })));
         if (!title) return;
 
         const fd = new FormData();
@@ -1025,6 +1131,7 @@
         fd.append('title', title);
         fd.append('description', desc);
         fd.append('type_id', typeId);
+        fd.append('checklist', checklistPayload);
 
         fetch(location.href, {
             method: 'POST',
@@ -1042,29 +1149,60 @@
 
     /* --------- Apply To-do template ---------- */
 
-    if (templateApplyBtn) {
-        templateApplyBtn.addEventListener('click', () => {
-            const tplId = templateSelect.value;
-            const cardId = cardIdInput.value.trim();
-            if (!tplId) return;
+    function getTemplateItemsById(tplId) {
+        const tpl = (currentSettings.templates || []).find(t => String(t.id) === String(tplId));
+        if (!tpl) return [];
+        try {
+            const parsed = JSON.parse(tpl.items || '[]');
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+            return [];
+        }
+    }
 
-            // 新卡片：前端直接插入 Markdown
-            if (!cardId) {
-                const tpl = (currentSettings.templates || []).find(t => String(t.id) === String(tplId));
-                if (!tpl) return;
-                let items = [];
-                try {
-                    items = JSON.parse(tpl.items || '[]');
-                } catch (e) {}
-                if (!items.length) return;
-                let md = '\n\n';
-                items.forEach(i => { md += '- [ ] ' + i + '\n'; });
-                descInput.value = (descInput.value || '') + md;
-                descInput.focus();
+    function hideTemplateDropdown() {
+        if (templateDropdown) templateDropdown.classList.remove('show');
+    }
+
+    if (templateTrigger && templateDropdown) {
+        templateTrigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            templateDropdown.classList.toggle('show');
+            if (templateDropdown.classList.contains('show')) {
+                templateSelect?.focus();
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!templateDropdown.contains(e.target) && e.target !== templateTrigger) {
+                hideTemplateDropdown();
+            }
+        });
+    }
+
+    if (templateSelect) {
+        templateSelect.addEventListener('change', () => {
+            const tplId = templateSelect.value;
+            if (!tplId) {
+                hideTemplateDropdown();
                 return;
             }
 
-            // 已存在卡片：交給後端更新 description
+            const items = getTemplateItemsById(tplId);
+            if (!items.length) {
+                hideTemplateDropdown();
+                return;
+            }
+
+            const cardId = cardIdInput.value.trim();
+            if (!cardId) {
+                const additions = items.map(t => ({id: null, title: t, done: false}));
+                setChecklistState([...checklistState, ...additions]);
+                templateSelect.value = '';
+                hideTemplateDropdown();
+                return;
+            }
+
             const fd = new FormData();
             fd.append('action', 'apply_todo_template');
             fd.append('card_id', cardId);
@@ -1074,11 +1212,16 @@
                 .then(r => r.json())
                 .then(res => {
                     if (!res.ok) throw new Error(res.error || '套用失敗');
-                    location.reload();
+                    setChecklistState(res.checklist || []);
+                    showToast('已加入模板清單');
                 })
                 .catch(err => {
                     console.error(err);
                     showToast('套用模板失敗');
+                })
+                .finally(() => {
+                    templateSelect.value = '';
+                    hideTemplateDropdown();
                 });
         });
     }
