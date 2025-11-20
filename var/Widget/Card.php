@@ -34,7 +34,7 @@ class Kanban_Widget_Card extends Kanban_Widget_Base
         $this->position    = (int)$data['position'];
     }
 
-    public static function create(int $columnId, string $title, string $description = ''): void
+    public static function create(int $columnId, string $title, string $description = '', ?int $typeId = null): void
     {
         $db = Kanban_Db::getInstance();
 
@@ -43,13 +43,14 @@ class Kanban_Widget_Card extends Kanban_Widget_Base
         $stmt->execute(['cid' => $columnId]);
         $maxPos = (int)$stmt->fetchColumn();
 
-        $stmt = $db->prepare('INSERT INTO cards (column_id, title, description, position) 
-                              VALUES (:cid, :title, :desc, :pos)');
+        $stmt = $db->prepare('INSERT INTO cards (column_id, title, description, position, type_id)
+                              VALUES (:cid, :title, :desc, :pos, :type_id)');
         $stmt->execute([
             'cid' => $columnId,
             'title' => $title,
             'desc' => $description,
             'pos' => $maxPos + 1,
+            'type_id' => $typeId,
         ]);
     }
 
@@ -131,20 +132,72 @@ class Kanban_Widget_Card extends Kanban_Widget_Base
     }
 
 
-    public static function updateCard(int $cardId, string $title, string $description = '', ?int $typeId = null): void
+    public static function updateCard(
+        int $cardId,
+        string $title,
+        string $description = '',
+        ?int $typeId = null,
+        ?int $columnId = null
+    ): void
     {
         $db = Kanban_Db::getInstance();
-        $stmt = $db->prepare(
-            'UPDATE cards 
-            SET title = :title, description = :description, type_id = :type_id 
-            WHERE id = :id'
-        );
-        $stmt->execute([
-            'title'       => $title,
-            'description' => $description,
-            'type_id'     => $typeId,
-            'id'          => $cardId,
-        ]);
+        $stmt = $db->prepare('SELECT column_id FROM cards WHERE id = :id');
+        $stmt->execute(['id' => $cardId]);
+        $current = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$current) {
+            throw new RuntimeException('Card not found');
+        }
+
+        $currentColumn = (int)$current['column_id'];
+        $targetColumn  = $columnId ?? $currentColumn;
+
+        $db->beginTransaction();
+
+        try {
+            if ($targetColumn !== $currentColumn) {
+                $stmtPos = $db->prepare('SELECT COALESCE(MAX(position), 0) FROM cards WHERE column_id = :cid');
+                $stmtPos->execute(['cid' => $targetColumn]);
+                $newPos = ((int)$stmtPos->fetchColumn()) + 1;
+
+                $stmtUpdate = $db->prepare(
+                    'UPDATE cards
+                     SET column_id = :column_id,
+                         position = :position,
+                         title = :title,
+                         description = :description,
+                         type_id = :type_id
+                     WHERE id = :id'
+                );
+                $stmtUpdate->execute([
+                    'column_id'   => $targetColumn,
+                    'position'    => $newPos,
+                    'title'       => $title,
+                    'description' => $description,
+                    'type_id'     => $typeId,
+                    'id'          => $cardId,
+                ]);
+            } else {
+                $stmtUpdate = $db->prepare(
+                    'UPDATE cards
+                     SET title = :title,
+                         description = :description,
+                         type_id = :type_id
+                     WHERE id = :id'
+                );
+                $stmtUpdate->execute([
+                    'title'       => $title,
+                    'description' => $description,
+                    'type_id'     => $typeId,
+                    'id'          => $cardId,
+                ]);
+            }
+
+            $db->commit();
+        } catch (Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
     }
 
 
